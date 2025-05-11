@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ENEM 2</title>
+  <style>
+    body { margin:0; padding:0; overflow:hidden;
+      background:#f5f5f5; font-family:Arial,sans-serif;
+      display:flex;justify-content:center;align-items:center;
+      height:100vh;
+    }
+    canvas#bg { position:absolute;top:0;left:0;width:100%;height:100%;z-index:-1; }
+    #game-container { background:#fff;padding:30px;border-radius:12px;
+      box-shadow:0 6px 16px rgba(0,0,0,0.15);width:500px;max-width:90%;text-align:center;
+      position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;
+    }
+    h1 { font-size:1.8em;margin-bottom:10px;color:#333; }
+    #question { font-size:1.1em; margin:16px 0; min-height:70px; color:#444; }
+    #options { width:100%; display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:12px; }
+    .option-btn { padding:10px; font-size:0.95em; border:2px solid #007BFF;
+      border-radius:5px; background:#fff; cursor:pointer; text-align:left;
+    }
+    .option-btn:hover { background:#e6f0ff; }
+    #stats { font-size:0.9em;color:#555;line-height:1.4;margin-bottom:10px; }
+    #tools { margin-bottom:10px; }
+    #tools input, #tools button { margin:0 4px; }
+    #draw-area { border:2px solid #ccc;border-radius:5px; margin-top:10px; position:relative; }
+    canvas#draw-canvas { display:block;background:#fff;cursor:crosshair; }
+  </style>
+</head>
+<body>
+  <canvas id="bg"></canvas>
+  <div id="game-container">
+    <h1>ENEM 2</h1>
+    <div id="question">Carregando desafio…</div>
+    <div id="options"></div>
+    <div id="stats">
+      Questão: <span id="question-count">0</span> | Nível: <span id="level">-</span> | Tempo (s): <span id="time-running">0.00</span>
+    </div>
+    <div id="tools">
+      <input type="color" id="color-picker" value="#000000">
+      <label for="size-picker">Espessura:</label>
+      <input type="range" id="size-picker" min="1" max="10" value="2">
+      <button id="eraser-btn">Borracha</button>
+      <button id="undo-btn">Desfazer</button>
+      <button id="save-btn">Salvar desenho</button>
+      <button id="clear-btn">Limpar</button>
+    </div>
+    <div id="draw-area">
+      <canvas id="draw-canvas" width="450" height="200"></canvas>
+    </div>
+  </div>
+
+  <script>
+    // — Fundo animado —
+    const bg = document.getElementById('bg'), ctxBg = bg.getContext('2d');
+    let squares = [];
+    function resizeBg(){ bg.width=innerWidth; bg.height=innerHeight; }
+    window.addEventListener('resize',resizeBg); resizeBg();
+    class Square { constructor(){ this.size=Math.random()*50+30;this.x=Math.random()*bg.width;this.y=Math.random()*bg.height;this.vx=(Math.random()-0.5)*0.4;this.vy=(Math.random()-0.5)*0.4;const c=Math.floor(120+Math.random()*80);this.color=`rgba(${c},${c},${c},0.3)`;}update(){this.x=(this.x+this.vx+bg.width)%bg.width;this.y=(this.y+this.vy+bg.height)%bg.height;}draw(){ctxBg.fillStyle=this.color;ctxBg.fillRect(this.x,this.y,this.size,this.size);}};
+    for(let i=0;i<50;i++) squares.push(new Square());
+    (function anim(){ctxBg.clearRect(0,0,bg.width,bg.height);squares.forEach(s=>{s.update();s.draw()});requestAnimationFrame(anim);})();
+
+    // — Banco de questões baseado em ENEM reais —
+    let questionBank = [];
+
+    fetch('questoes.json')  // Carregando questões de um arquivo JSON
+      .then(res => res.json())
+      .then(data => {
+        questionBank = data;
+        pool = [...questionBank];
+        nextQuestion();
+      })
+      .catch(err => {
+        document.getElementById('question').textContent = "Erro ao carregar as questões.";
+        console.error("Erro ao carregar JSON:", err);
+      });
+
+    // — Controle do jogo —
+    let pool = [];
+    let questionCount = 0, current = null;
+    let timerInt, startTime;
+    const qEl = document.getElementById('question'),
+          optEl = document.getElementById('options'),
+          countEl = document.getElementById('question-count'),
+          levelEl = document.getElementById('level'),
+          timerDisplay = document.getElementById('time-running');
+
+    // — Lousa e desenho contínuo —
+    const dC = document.getElementById('draw-canvas'), dCtx = dC.getContext('2d');
+    let drawing=false, erasing=false;
+    let lastX=0, lastY=0;
+    const colorPicker = document.getElementById('color-picker'),
+          sizePicker  = document.getElementById('size-picker'),
+          eraserBtn   = document.getElementById('eraser-btn'),
+          undoBtn     = document.getElementById('undo-btn'),
+          saveBtn     = document.getElementById('save-btn'),
+          clearBtn    = document.getElementById('clear-btn');
+    const history = [], maxHistory=20;
+
+    function snapshot(){ if(history.length>=maxHistory) history.shift(); history.push(dCtx.getImageData(0,0,dC.width,dC.height)); }
+    function drawGrid(){ dCtx.clearRect(0,0,dC.width,dC.height); dCtx.save(); dCtx.strokeStyle='#ddd'; dCtx.lineWidth=0.5;
+      const step=20;
+      for(let x=0;x<dC.width;x+=step){ dCtx.beginPath(); dCtx.moveTo(x,0); dCtx.lineTo(x,dC.height); dCtx.stroke(); }
+      for(let y=0;y<dC.height;y+=step){ dCtx.beginPath(); dCtx.moveTo(0,y); dCtx.lineTo(dC.width,y); dCtx.stroke(); }
+      dCtx.restore();
+    }
+    drawGrid();
+
+    dC.addEventListener('mousedown', e=>{
+      snapshot(); drawing=true;
+      const r = dC.getBoundingClientRect();
+      lastX = e.clientX - r.left;
+      lastY = e.clientY - r.top;
+    });
+    dC.addEventListener('mouseup', ()=>drawing=false);
+    dC.addEventListener('mouseout', ()=>drawing=false);
+    dC.addEventListener('mousemove', e=>{
+      if(!drawing) return;
+      const r = dC.getBoundingClientRect();
+      const x = e.clientX - r.left;
+      const y = e.clientY - r.top;
+      dCtx.globalCompositeOperation = erasing ? 'destination-out' : 'source-over';
+      dCtx.strokeStyle = colorPicker.value;
+      dCtx.lineWidth = Number(sizePicker.value);
+      dCtx.lineCap = 'round';
+      dCtx.beginPath();
+      dCtx.moveTo(lastX, lastY);
+      dCtx.lineTo(x, y);
+      dCtx.stroke();
+      lastX = x;
+      lastY = y;
+    });
+    eraserBtn.addEventListener('click', ()=>{ erasing = !erasing; eraserBtn.textContent = erasing ? 'Caneta' : 'Borracha'; });
+    undoBtn.addEventListener('click', ()=>{ if(history.length){ const img = history.pop(); dCtx.putImageData(img,0,0); } });
+    saveBtn.addEventListener('click', ()=>{ const link = document.createElement('a'); link.download = `desenho_${Date.now()}.png`; link.href = dC.toDataURL(); link.click(); });
+    clearBtn.addEventListener('click', ()=>{ drawGrid(); history.length = 0; });
+
+    function startTimer(){ clearInterval(timerInt); startTime = Date.now(); timerDisplay.textContent = '0.00';
+      timerInt = setInterval(()=>{
+        const elapsed = (Date.now() - startTime)/1000;
+        timerDisplay.textContent = elapsed.toFixed(2);
+        if(elapsed >= 180){ clearInterval(timerInt); alert('Tempo esgotado! Você não está preparado para o ENEM.'); nextQuestion(); }
+      }, 100);
+    }
+
+    function chooseOption(letter){ clearInterval(timerInt);
+      if(letter === current.correct) alert('Correto! Próxima questão.');
+      else alert('Errado! Você não está preparado para o ENEM.');
+      nextQuestion();
+    }
+
+    function renderOptions(opts){ optEl.innerHTML = '';
+      const letters = ['A','B','C','D','E'];
+      opts.forEach((text,i)=>{
+        const btn = document.createElement('button');
+        btn.className = 'option-btn';
+        btn.innerHTML = `<strong>${letters[i]}.</strong> ${text}`;
+        btn.onclick = ()=> chooseOption(letters[i]);
+        optEl.appendChild(btn);
+      });
+    }
+
+    function nextQuestion(){
+      drawGrid(); history.length = 0;
+      if(pool.length === 0) pool = [...questionBank];
+      const idx = Math.floor(Math.random() * pool.length);
+      current = pool.splice(idx,1)[0];
+      questionCount++; countEl.textContent = questionCount;
+      levelEl.textContent = current.level;
+      qEl.textContent = `[${current.subject}] ${current.question}`;
+      renderOptions(current.options);
+      startTimer();
+    }
+
+    // Inicia o jogo
+    nextQuestion();
+  </script>
+</body>
+</html>
